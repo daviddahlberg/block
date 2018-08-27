@@ -1,0 +1,246 @@
+.\"$OpenBSD$
+.\"
+.\"Copyright (c) 2015-2016 David Dahlberg <dyn+code@dahlberg.cologne>
+.\"
+.\"Permission to use, copy, modify, and distribute this software for any
+.\"purpose with or without fee is hereby granted, provided that the above
+.\"copyright notice and this permission notice appear in all copies.
+.\"
+.\"THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\"WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\"MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\"ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\"WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\"ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\"OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.Dd $Mdocdate: October 28 2015 $
+.Dt BLOCK 1
+.Os
+.Sh NAME
+.Nm block
+.Nd BSD licenced open cryptographic keystore
+.Sh SYNOPSIS
+.Nm
+.Fl I
+.Fl k Ar key-id
+.Nm
+.Fl G
+.Op Fl cq
+.Op Fl m Ar mode
+.Op Fl l Ar length
+.Fl p Ar password
+.Nm
+.Fl A
+.Op Fl q
+.Fl p Ar password
+.Nm
+.Fl S
+.Op Fl cq
+.Fl p Ar password
+.Nm
+.Fl E
+.Fl p Ar password
+.Nm
+.Fl L
+.Op Fl t Ar subtree
+.Nm
+.Fl Q
+.Ar string
+.Nm
+.Fl D
+.Op Fl p Ar password | Fl t Ar subtree
+.Sh DESCRIPTION
+.Nm
+is a mostly binary-compatible replacement implementation for
+.Xr pass 1 .
+But where
+.Xr pass 1
+is heavily relying on tools and commands of the GNU/Linux environment,
+.Nm
+tries to adhere to
+.St -p1003.1-2008
+where possible.
+.Pp
+Select the mode of operation with the following options:
+.Bl -tag -width Ds
+.It Fl I
+Initialize password store.
+.Pp
+This will create the required
+.Sx FILES
+and initialize a
+.Xr git 1
+repository at the password store if the required tools are available.
+.It Fl G
+Generate a new password.
+.Pp
+By default, a 16 digit password will be generated from the \(dqspecials,
+numbers, capital letters and lower case letters\(dq character set.
+For more options see
+.Fl m
+and
+.Fl l
+flags.
+.It Fl A
+Manually add a password to the password store.
+.It Fl S
+Show a password.
+.It Fl E
+Edit a password.
+.Pp
+The password will be saved to a temporary location and edited there.
+Be aware, that deleting the password may be unreliable and thus leak
+information.
+.It Fl L
+Print list of stored passwords.
+.It Fl Q Ar string
+Search the password store for a passwords containing
+.Ar string .
+.It Fl D
+Delete a password or a subtree of passwords.
+.El
+.Pp
+The other options are as follows:
+.Bl -tag -width Ds
+.It Fl c
+Use
+.Xr xclip 1
+to copy the password to the clipboard.
+For multi-line passwords, only the first line will be used.
+.It Fl l Ar length
+When generating passwords, use this option to specify the desired
+.Ar length
+in characters.
+The default value is 16.
+.It Fl m Ar mode
+Specify the desired character set for password generation (see
+.Xr apg 1 ,
+.Fl M
+flag).
+.Pp
+Default mode is "sncl", meaning special characters, numbers, capital letters
+and lower case letters.
+.It Fl p Ar password
+Specify the password entry to use.
+.It Fl q
+Suppress password display.
+.Pp
+Please test this option on your platform before you rely on it.
+The default behaviour is to display passwords.
+.It Fl k Ar key-id
+After initialization, use
+.Ar key-id
+for PGP encryption.
+.Pp
+Unlike
+.Xr pass 1 ,
+this sets the
+.Ar key-id
+to be used only for new or changed passwords.
+Existing entries won't be re-encrypted.
+.It Fl t Ar subtree
+Specify the subtree of the password store to work on.
+.El
+.Ss Git support
+If
+.Xr git 1
+is found on the system, it will automatically be used.
+If
+.Nm
+is working on a
+.Xr git 1
+repository, it will not ask for confirmation before deleting or overwriting any
+files or passwords.
+.Ss Multi-line password files
+Passwords are stored in the first line of a passwort file.
+Successive lines may optionally be used for additional information like URIs
+or security questions.
+.Pp
+The
+.Fl S
+and
+.Fl E
+operations may be used to display or edit multi-line password files.
+Contrarily, any combination that uses
+.Fl G ,
+.Fl A
+and
+.Fl c
+flags will operate on the first line of a password file only.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev PASSWORD_STORE_DIR
+The directory of the password store
+.Pq default: Pa ~/.password-store .
+.It Ev EDITOR
+Editor to use when editing passwords
+.Pq default: Xr vi 1 .
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa ~/.password-store
+Default directory to which passwords are stored.
+.It Pa ~/.password-store/.gpg-id
+Specifies the PGP key that will be used to encrypt new passwords.
+.El
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+Initialize password store:
+.Dl $ block -I -k 0x10BADC0FFEE54A11
+.Pp
+Generate password for
+.Qq website/user :
+.Dl $ block -G -p website/user
+.Pp
+List all available passwords:
+.Dl $ block -L
+.Pp
+Show password for
+.Qq website/user :
+.Dl $ block -S -p website/user
+.Sh SEE ALSO
+.Xr apg 1 ,
+.Xr git 1 ,
+.Xr gpg2 1 ,
+.Xr netpgp 1 ,
+.Xr pass 1 ,
+.Xr xclip 1
+.Sh HISTORY
+The
+.Nm
+utility has been available since 2015.
+.Sh AUTHORS
+.An David Dahlberg Aq Mt dyn+code@dahlberg.cologne
+.Sh CAVEATS
+.Ss Interoperability
+.Nm
+is is mostly binary interoperable with
+.Xr pass 1 ,
+there are some differences though.
+So please be careful if you are using both tools with the same password
+store, especially when dealing with more complex
+.Xr pass 1
+setups.
+.Ss Usage of multiple keys in one password store
+Encryption to multiple keys and encryption to different keys on a
+per-subtree basis is supported by
+.Xr pass 1 .
+On the contrary,
+.Nm
+will always encrypt to the first
+.Ar key-id
+listed in the
+Pa .gpg-id
+file in the root directory of your password store.
+.Ss Re-initialization of a password store
+When reinitializing an existing password store using the
+.Fl I
+command,
+.Nm
+will not re-encrypt the whole password store as
+.Xr pass 1
+does.
+Instead, the configured
+.Ar key-id
+will be changed and used from then on.

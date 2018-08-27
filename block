@@ -1,0 +1,491 @@
+#!/bin/sh
+# Copyright (c) 2015-2016 David Dahlberg <dyn+code@dahlberg.cologne>
+#
+# Permission to use, copy, modify, and distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+set -ea
+
+# Global variables
+
+script=$(basename $0)
+
+# find password store
+if [ "$PASSWORD_STORE_DIR" ]; then
+	pwstore="$PASSWORD_STORE_DIR"
+else
+	pwstore="$HOME/.password-store"
+fi
+
+# find configured PGP key
+key=$(cat $pwstore/.gpg-id 2>/dev/null| head -n 1)
+
+# test for PGP program
+if type netpgp > /dev/null 2>&1; then
+	encr="netpgp --encrypt --userid=$key --homedir $HOME/.netpgp"
+	decr="netpgp --decrypt --homedir $HOME/.netpgp --output=/dev/stdout"
+elif type gpg2 > /dev/null 2>&1; then
+	encr="gpg2 -r $key -u $key -es --use-agent"
+	decr="gpg2 -qd --use-agent"
+elif type gpg > /dev/null 2>&1; then
+	encr="gpg -r $key -u $key -es --use-agent"
+	decr="gpg -qd --use-agent"
+else
+	echo "No encryption program found"
+	exit 1
+fi
+
+
+# Subroutines: Helpers
+
+check_git () {
+	if type git > /dev/null 2>&1; then
+		if [ -d "$pwstore/.git" ]; then
+			return 0
+		fi
+	fi
+	return 1
+}
+
+check_init () {
+	if [ -z "$key" ]; then
+		echo "password store not initialized"
+		exit 1
+	elif echo "$key" | grep -qvE '^0x[[:alnum:]]+$'; then 
+		echo "error on parsing encryption key: $key"
+		exit 1
+	fi
+}
+
+check_sure () {
+	question="Are you sure?"
+	[ "$#" -ge 1 ] && question="$1"
+	printf "$1"
+	read reply
+	reply=$(echo $reply | tr "[:upper:]" "[:lower:]")
+	case "$reply" in
+	y|yes)
+		return 0
+		;;
+	esac
+	return 1
+}
+
+# Print usage instructions and exit
+print_usage () {
+	echo "usage: $script -I -k key-id"
+	echo "       $script -G [-cq] [-m mode] [-l num] -p password"
+	echo "       $script -A [-q] -p password"
+	echo "       $script -S [-cq] -p password"
+	echo "       $script -E -p password"
+	echo "       $script -L [-t subtree]"
+	echo "       $script -Q string"
+	echo "       $script -D [-p password | -t subtree]"
+	exit 1
+}
+
+temp_create () {
+	if [ -d "/dev/shm" ]; then
+		temp=$(mktemp -d /dev/shm/block.XXXXXXXXXXXXXXXX) || exit 1
+	else
+		[ "$TEMPDIR"] || TEMPDIR=/tmp
+		temp=$(mktemp -d $TEMPDIR/block.XXXXXXXXXXXXXXXX) || exit 1
+	fi
+	echo $temp
+}
+
+temp_destroy () {
+	if [ -d "$1" ]; then
+		temp="$1"
+	else
+		echo "could not delete temporary directory: does not exist"
+		exit 1
+	fi
+
+	# test for shred(1) equivalent
+	if rm -P -f >/dev/null 2>&1; then
+		# BSD userland
+		rm -P -f "$temp"/* 2>/dev/null
+	elif type shred > /dev/null 2>&1; then
+		shred -n1 -u "$temp"/* || true
+	else
+		echo "could not overwrite files" >&2
+	fi
+	rm -rf "$temp"
+}
+
+# Subroutines: Commands
+
+# Add password 
+# Usage: block -A [-q] -p password
+cmd_add () {
+	if [ -z "$password" ]; then
+		echo "missing parameter: -p password" >&2
+		print_usage
+	fi
+	check_init
+
+	if [ "$quiet" ]; then
+		printf "Enter passphrase (will not be echoed): "
+		stty -echo
+		read newpass
+		stty echo
+		echo
+	else
+		printf "Enter passphrase (will be echoed): "
+		read newpass
+	fi
+
+	file="$pwstore/$password.gpg"
+	path=$(dirname "$file")
+	if [ -f "$file" ]; then
+		if ! check_git; then
+			check_sure "Password for '$password' already exists. Overwrite? " \
+				|| exit 1
+		fi
+		oldpass=$($decr "$file" | tail -n +2)
+		[ "$oldpass" ] && oldpass="\n$oldpass"
+	fi
+
+	mkdir -p $path
+	echo "$newpass$oldpass" | $encr > $file
+	if check_git; then
+		cd "$pwstore"
+		git add "$file"
+		git commit -q -m "$script: new password for '$password' entered"
+	fi
+}
+
+# Delete a password (tree)
+# Usage: block -D [-p password | -t subtree]
+cmd_delete () {
+	if [ -z "$password" ] && [ -z "$tree" ]; then
+		echo "missing parameter: -p password | -t subtree" >&2
+		print_usage
+	elif [ "$password" ] && [ "$tree" ]; then
+		echo "too many parameters: use: -p OR -t" >&2
+		print_usage
+	fi
+
+	if [ "$password" ]; then
+		file="$pwstore/$password.gpg"
+		item="password"
+		key="$password"
+		if [ ! -f "$file" ]; then
+			printf "Password '%s' does not exist\n" "$file"
+			exit 1
+		fi
+	fi
+
+	if [ "$tree" ]; then
+		file="$pwstore/$tree"
+		item="subtree"
+		key="$tree"
+		if [ ! -d "$file" ]; then
+			printf "Subtree '%s' does not exist\n" "$file"
+			exit 1
+		fi
+	fi
+
+	if check_git; then
+		cd "$pwstore"
+		git rm -r "$file"
+		git commit -q -m "$script: $item '$key' deleted"
+	else
+		check_sure "Delete $item '$key'? " \
+			|| exit 1
+		rm -r "$file"
+	fi
+}
+
+# Edit a password
+# Usage: block -E -p password
+cmd_edit () {
+	if [ -z "$password" ]; then
+		echo "missing parameter: -p password" >&2
+		print_usage
+	fi
+	file="$pwstore/$password.gpg"
+	path=$(dirname "$file")
+	temp="$(temp_create)"
+	if [ -f "$file" ]; then
+		$decr "$file" > "$temp/passfile"
+	fi
+	${EDITOR:=vi} "$temp/passfile"
+
+	if [ -f "$temp/passfile" ]; then
+		if ! check_git && [ -f "$file" ]; then
+			if ! check_sure "Overwrite '$password'? "; then
+				temp_destroy "$temp"
+				exit 1
+			fi
+		fi
+		mkdir -p $path
+		cat "$temp/passfile" | $encr > $file
+		if check_git; then
+			cd "$pwstore"
+			git add "$file"
+			git commit -q -m "$script: password for $password has been edited"
+		fi
+	else
+		echo "Cancelled."
+		temp_destroy "$temp" 2>/dev/null
+		exit 1
+	fi
+	temp_destroy "$temp"
+}
+
+# Generate password
+# Usage: block -G [-m mode] [-l num] [-cq] -p password
+cmd_generate () {
+	if [ -z "$password" ]; then
+		echo "missing parameter: -p password" >&2
+		print_usage
+	fi
+	check_init
+	len=${len:-16}
+	mode=${mode:-sncl}
+
+	if [ -r /dev/urandom ]; then
+		newpass=$(apg -a 1 -n 1 -M $mode -m $len -x $len -c /dev/urandom)
+	else
+		echo "/dev/urandom not readable" >&2
+		exit 1 
+	fi
+	if [ -z "$newpass" ]; then
+		echo "Password generation failed" >&2
+		exit 1 
+	fi
+	
+	file="$pwstore/$password.gpg"
+	path=$(dirname "$file")
+	if [ -f "$file" ]; then
+		if ! check_git; then
+			check_sure "Password for '$password' already exists. Overwrite? " \
+				|| exit 1
+		fi
+		oldpass=$($decr "$file" | tail -n +2)
+		[ "$oldpass" ] && oldpass="\n$oldpass"
+	else	
+		unset $oldpass
+	fi
+	mkdir -p $path
+
+	echo "${newpass}$oldpass" | $encr > $file 
+	if check_git; then
+		cd "$pwstore"
+		git add "$file"
+		git commit -q -m "$script: new password for $name generated"
+	fi
+
+	if [ "$clip" ]; then
+		printf "%s" "$newpass" | $clip
+	fi
+
+	if [ ! "$quiet" ]; then
+		printf "%s\n" "$newpass"
+	fi
+}
+
+# Initialize password store
+# Usage: block -I -k key-id
+cmd_init () {
+	if [ -z "$key" ]; then
+		echo "missing parameter: -k key-id" >&2
+		print_usage
+	fi
+	mkdir -p "$pwstore"
+	if [ -f "$pwstore/.gpg-id" ]; then
+		oldkey=$(head -n 1 $pwstore/.gpg-id)
+		check_sure "Password store is already configured for $oldkey. Proceed? " \
+			|| exit 1
+	fi
+	echo "$key" > "$pwstore/.gpg-id"
+	if type git > /dev/null 2>&1 && [ ! -d "$pwstore/.git" ]; then
+		cd "$pwstore"
+		git init "$pwstore"
+		git config --local diff.gpg.binary true
+		git config --local diff.gpg.textconv "$decr"
+		printf "Password Store" > "$pwstore/.git/description"
+		echo "*.gpg diff=gpg" > "$pwstore/.gitattributes"
+		git add "$pwstore/.gitattributes"
+	fi
+	if check_git; then
+		cd "$pwstore"
+		git add $pwstore/.gpg-id
+		git commit -q -m "$script: password store initialization"
+	fi
+}
+
+# Print a pretty list of passwords
+# Usage: block -L [subtree]
+cmd_list () {
+	if [ -z "$tree" ]; then
+		echo "Password Store"
+	elif [ -d "$pwstore/$tree" ]; then
+		echo "$tree"
+	else
+		echo "No such subtree: $tree" 
+		exit 1
+	fi
+
+	# print tree
+	if type tree > /dev/null 2>&1; then
+		tree "$pwstore/$tree" \
+			| sed -e "1d" -e "s/\.gpg\$//" -e "$ d" -e "$ d"
+	else
+		find "$pwstore/$tree" -name *.gpg \
+		    | sed -e "s/\.gpg\$//" \
+		        -e "s/^.*\.password-store\/\(.*\)\$/| \1/" \
+		    | sort 
+	fi
+}
+
+# Query for password 
+# Usage: block -Q string
+cmd_query () {
+	if [ -z "$query" ]; then
+		echo "missing parameter: string" >&2
+		print_usage
+	fi
+	find "$pwstore" -name "*$query*.gpg" \
+	    | sed -e "s/\.gpg\$//" \
+	        -e "s/^.*\.password-store\/\(.*\)\$/| \1/" \
+	    | sort 
+}
+
+# Show a password
+# Usage: block -S [-cn] -p password
+cmd_show () {
+	if [ -z "$password" ]; then
+		echo "missing parameter: -p password" >&2
+		print_usage
+	fi
+	file="$pwstore/$password.gpg"
+	if [ -f "$file" ]; then
+		pass=$($decr "$file")
+	else
+		echo "No such password: $password"
+		exit 1
+	fi
+
+	if [ "$clip" ]; then
+		printf "%s" "$pass" | head -n1 | $clip
+	fi
+	if [ ! "$quiet" ]; then
+		printf "%s\n" "$pass"
+	fi
+
+}
+
+# End subroutines
+
+unset clip cmd len mode password
+while getopts ADEGILQ:Scgk:l:m:p:qt: name; do 
+	case $name in
+	A)
+		cmd=add
+		;;
+	D)
+		cmd=delete
+		;;
+	E)
+		cmd=edit
+		;;
+	G)
+		cmd=generate
+		;;
+	I)
+		cmd=init
+		;;
+	L)
+		cmd=list
+		;;
+	Q)
+		cmd=query
+		query="$OPTARG"
+		;;
+	S)
+		cmd=show
+		;;
+	c)
+		if type xclip > /dev/null 2>&1; then
+			clip=xclip
+		else
+			echo "'$1' not supported: no suitable command found" >&2
+			exit 1
+		fi
+		;;
+	k)
+		key="$OPTARG"
+		;;
+	l)
+		len="$OPTARG"
+		;;
+	m)
+		mode="$OPTARG"
+		;;
+	p)
+		password="$OPTARG"
+		;;
+	q)
+		quiet=true
+		;;
+	t)
+		tree="$OPTARG"
+		;;
+	*)
+		print_usage
+		;;
+	esac
+done
+shift $(($OPTIND - 1))
+
+if [ "$@" ]; then
+	echo "unknown parameter(s): $@" >&2
+	print_usage
+fi
+
+case "$cmd" in
+add)
+	cmd_add
+	;;
+delete)
+	cmd_delete
+	;;
+edit)
+	cmd_edit
+	;;
+generate)
+	cmd_generate
+	;;
+init)
+	cmd_init
+	;;
+list)
+	cmd_list
+	;;
+query)
+	cmd_query
+	;;
+show)
+	cmd_show
+	;;
+"")
+	echo "missing command" >&2
+	print_usage
+	;;
+*)
+	echo "unknown command: \'$cmd\'" >&2
+	;;
+esac
+

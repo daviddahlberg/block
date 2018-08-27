@@ -1,0 +1,103 @@
+=======
+ block
+=======
+----------------------------------------------
+ the BSD licenced open cryptographic keystore
+----------------------------------------------
+
+Block is designed as a drop-in replacement for `pass(1)`_. But where pass(1) is
+heavily relying on tools and commands of the GNU/Linux environment, block tries
+to rely to POSIX features as much as possible.
+
+.. _pass(1): http://www.passwordstore.org
+
++------------------------------------------------------------------------------+
+|                                  DISCLAIMER                                  |
++==============================================================================+
+| This is an EXPERIMENTAL script. You are free to use it, devolop it and       |
+| experiment with it. But do not whine, if it eats all your passwords.         |
+| The script is intended to be used manually on the system shell. It should    |
+| NOT BE CALLED by another script or program as the API is not stable yet and  |
+| it will not properly handle "strange" or malicious inputs either.            |
++------------------------------------------------------------------------------+
+
+Glossary
+========
+
+password
+	Within the context of this documents this normally references to a
+	stored password within the password store or a key which references the
+	password. A password is the end-node of a password (sub)tree.
+
+password store
+	The directory tree at ~/.password-store that holds your passwords.
+
+subtree
+	A collection of passwords within the password tree sharing a common
+	node. E.g. the subtree "foo/bar" might contain the passwords
+	"foo/bar/baz" and "foo/bar/quux".
+
+FAQ
+===
+
+Why keeps block(1) on asking for the PGP password so often?
+-----------------------------------------------------------
+
+It asks for the PGP key password, if either
+
+a) a password is being decrypted
+b) an existing password is being changed and thus has to be decrypted first
+c) a password is saved and signed
+
+All in all, this means that block(1) will ask for the PGP password for almost
+all operations. Sometimes even twice on a single call when a password is
+being decrypted, changed and re-encrypted/signed (-G/-A commands).
+
+You should really consider using gpg-agent or another tool with similar
+functionality.
+
+Are pass(1) and block(1) interoperable?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Mostly, there are some differences though. For example, block(1) does not
+support encryption to multiple PGP keys, nor different keys on a per-subtree
+basis. Also, there is no guarantee that it will be interoperable with future
+features of pass(1). So please check the man page if you want to know wether a
+specific functionality is supported or not.
+
+System requirements
+===================
+
+Required software
+-----------------
+
+- POSIX shell
+- netpgp or gpg2 or gpg
+- apg
+
+Recommended software
+--------------------
+
+- git
+- xclip
+- BSD rm or shred
+- tree
+
+Cheat sheet
+===========
+
++-------------------------+------------------------------------+
+| pass(1)                 | block(1)                           |
++=========================+====================================+
+| pass init key-id \      | block -I -k key-id                 |
+|     && pass git init    |                                    |
+| pass ls [subtree]       | block -L [-t subtree]              |
+| pass find string        | block -Q string                    |
+| pass show [-c] password | block -S [-cq] -p password         |
+| pass insert password    | block -A [-q] -p password          |
+| pass edit password      | block -E -p password               |
+| pass generate [-in] \   | block -G [-m ncl] \                |
+|     password [length]   |      -p password [-l len]          |
+| pass rm password        | block -D -p password               |
+| pass rm subtree         | block -D -t subtree                |
++--------------------------------------------------------------+
